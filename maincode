@@ -1,0 +1,219 @@
+#include<ESP32Servo.h>
+#include<WiFi.h>
+#include "config.h"
+#if defined(ARDUINO_ARCH_ESP32)
+  #include <ESP32Servo.h>
+#else
+  #include <Servo.h>
+#endif
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+// WiFi parameters
+#define WLAN_SSID       "SRU_WIFI"
+#define WLAN_PASS       "wifi@123"
+// Adafruit IO
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "sujio"
+#define AIO_KEY         "aio_SYmx61azm8haZywPaxmg17eIbpWJ" 
+WiFiClient client;
+// Setup the MQTT client class by passing in the WiFi client and MQTT server and login details.
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Publish gassensor = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/gassensor");
+Adafruit_MQTT_Publish watersensor = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/watersensor");
+#define relay 12 //light
+#define relay1 33 //motor
+#define SERVO_PIN 13
+#define SERVO_PIN1 21
+Servo servo;
+Servo servo1;
+AdafruitIO_Feed *servo_feed = io.feed("servo");
+AdafruitIO_Feed *servo1_feed = io.feed("servo1");
+AdafruitIO_Feed *relay_feed = io.feed("relay");
+const int waterPin = 23;
+int pos;
+int gassensorPin = 34; 
+int sensorValue;  
+int limit = 700; 
+
+void setup() {
+ Serial.begin(115000);
+ pinMode(relay, OUTPUT); //light
+ pinMode(relay1, OUTPUT); //motor
+ ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  // Debug console
+  servo.setPeriodHertz(50);
+  pinMode(waterPin, INPUT);
+  pinMode(relay,OUTPUT);
+  Serial.println(F("Adafruit IO Example"));
+  // Connect to WiFi access point.
+  Serial.println(); 
+  Serial.println();
+  delay(10);
+  Serial.print(F("Connecting to "));
+  Serial.println(WLAN_SSID);
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(F("."));
+  }
+  Serial.println();
+  Serial.println(F("WiFi connected"));
+  Serial.println(F("IP address: "));
+  Serial.println(WiFi.localIP());
+
+  // connect to adafruit io
+  connect();
+  while(! Serial);
+
+  // tell the servo class which pin we are using
+  servo.attach(SERVO_PIN);
+  servo1.attach(SERVO_PIN1);
+  // connect to io.adafruit.com
+  Serial.print("Connecting to Adafruit IO");
+  io.connect();
+  
+  servo_feed->onMessage(handleMessage);
+  servo1_feed->onMessage(handleMessage1);
+  relay_feed->onMessage(handleMessage2);
+  // wait for a connection
+  while(io.status() < AIO_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  Serial.println(io.statusText());
+  servo_feed->get();
+  servo1_feed->get();
+  relay_feed->get();
+}
+void connect() {
+  Serial.print(F("Connecting to Adafruit IO... "));
+  int8_t ret;
+  while ((ret = mqtt.connect()) != 0) {
+    switch (ret) {
+      case 1: Serial.println(F("Wrong protocol")); break;
+      case 2: Serial.println(F("ID rejected")); break;
+      case 3: Serial.println(F("Server unavail")); break;
+      case 4: Serial.println(F("Bad user/pass")); break;
+      case 5: Serial.println(F("Not authed")); break;
+      case 6: Serial.println(F("Failed to subscribe")); break;
+      default: Serial.println(F("Connection failed")); break;
+    }
+
+    if(ret >= 0)
+      mqtt.disconnect();
+
+    Serial.println(F("Retrying connection..."));
+    delay(10000);
+  }
+  Serial.println(F("Adafruit IO Connected!"));
+}
+
+void loop() 
+{
+  io.run();
+  // ping adafruit io a few times to make sure we remain connected
+  if(! mqtt.ping(3)) {
+    // reconnect to adafruit io
+    if(! mqtt.connected())
+      connect();
+  }
+ servo.attach(SERVO_PIN);
+ servo1.attach(SERVO_PIN1);
+ sensorValue = analogRead(gassensorPin); 
+ Serial.println("gas sensor Value : ");
+ Serial.println(sensorValue);
+ /*if(sensorValue>=limit)
+ {
+     servo.write(0);  
+ }
+ else
+ {
+  servo.write(90);
+ }
+ */
+ 
+ delay(2000);
+  int waterStatus = digitalRead(waterPin);
+  delay(1000);
+
+  if (waterStatus == 0)
+  {
+    Serial.print("tank empty ON motor");
+    Serial.println(waterStatus);
+    digitalWrite(relay1, HIGH);
+    delay(1000);
+
+  }
+  else
+  {
+    Serial.print("Tank Full Off Motor");
+    Serial.println(waterStatus);
+    digitalWrite(relay1, LOW);
+    delay(1000);
+  }
+  delay(5000);
+  if (! gassensor.publish(sensorValue)) {                     //Publish to Adafruit
+      Serial.println(F("Failed"));
+    } 
+       if (! watersensor.publish(waterStatus)) {                     //Publish to Adafruit
+      Serial.println(F("Failed"));
+    }
+    else {
+      Serial.println(F("Sent gas and water!"));
+    }
+}
+void handleMessage(AdafruitIO_Data *data) {
+
+  // convert the data to integer
+  int angle = data->toInt();
+
+  if(angle <= 20)
+    angle = 0;
+  else if(angle >= 80||sensorValue>=limit)
+    angle = 90;
+
+  servo.write(angle);
+
+}
+
+//door control
+void handleMessage1(AdafruitIO_Data *data) {
+
+  // convert the data to integer
+  int angle = data->toInt();
+
+  if(angle <= 0)
+  {
+    angle = 0;
+    Serial.print("off");
+  }
+  else if(angle >= 100)
+  {
+    angle = 100;
+    Serial.print("on");
+  }
+
+  servo1.write(angle);
+
+}
+void handleMessage2(AdafruitIO_Data *data) {
+
+  // convert the data to integer
+  int button = data->toInt();
+
+  if(button == 0)
+  {
+    digitalWrite(relay,LOW);
+    Serial.print("off");
+  }
+  else if(button == 1)
+  {
+    digitalWrite(relay,HIGH);
+    Serial.print("on");
+  }
+}
